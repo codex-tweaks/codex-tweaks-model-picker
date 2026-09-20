@@ -1,0 +1,6 @@
+[tools]
+node = "24.16.0"
+
+[tasks.check]
+description = "检查 Renderer 入口的 JavaScript 语法"
+run = "node --check src/index.js"
