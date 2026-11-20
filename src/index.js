@@ -5,11 +5,12 @@ export function activate({ api, root }) {
 
 // 把模型按首个斜杠前缀整理成悬浮展开的固定两级菜单。
 // 无前缀模型统一放入 Codex 分类。第二层移动并复用 Codex 原生模型项，
-// 因而选择、勾选和关闭菜单仍完全由 Codex 自己处理。兼容旧版模型
-// 子菜单和新版模型选择器的高级视图。
+// 因而选择、勾选和切回推理强度视图仍由 Codex 处理。
 
 const MODEL_MENU_MARKER = "data-codex-tweaks-model-menu";
 const MODEL_SUBMENU_MARKER = "data-codex-tweaks-model-submenu";
+const MODEL_TRIGGER_SELECTOR =
+  '[data-composer-navigation-target="reasoning"][aria-haspopup="menu"]';
 const MODEL_TRIGGER_MARKER = "data-codex-tweaks-model-trigger";
 const MODEL_TRIGGER_EXPANDED_MARKER =
   "data-codex-tweaks-model-trigger-expanded";
@@ -31,18 +32,6 @@ const MODEL_SUBMENU_TEXT_BUFFER = 12;
 const modelMenuStates = new Map();
 const modelTriggerStates = new Map();
 let modelMenuScanQueued = false;
-
-function getDirectMenuItems(menu) {
-  return [...menu.querySelectorAll('[role="menuitem"]')].filter(
-    (item) => item.closest('[role="menu"]') === menu,
-  );
-}
-
-function getDirectChildrenByRole(container, role) {
-  return [...container.children].filter(
-    (child) => child.getAttribute("role") === role,
-  );
-}
 
 function parseModelName(fullName) {
   const slashIndex = fullName.indexOf("/");
@@ -208,15 +197,11 @@ function measureModelSubmenuWidth(state, group) {
   );
 }
 
-function isCodexIntelligenceTrigger(trigger) {
-  return (
-    trigger?.matches('[data-codex-intelligence-trigger="true"]') &&
-    !/ChatGPT/i.test(trigger.getAttribute("aria-label") ?? "")
-  );
-}
-
 function findQualifiedModelTextNode(trigger) {
-  const walker = document.createTreeWalker(trigger, NodeFilter.SHOW_TEXT);
+  const modelLabel = trigger.querySelector("[data-model-selection-label]");
+  if (!modelLabel) return null;
+
+  const walker = document.createTreeWalker(modelLabel, NodeFilter.SHOW_TEXT);
   let candidate = null;
 
   while (walker.nextNode()) {
@@ -287,7 +272,7 @@ function renderModelTriggerExpandedState(state) {
 }
 
 function syncModelTriggerLabel(state) {
-  if (!isCodexIntelligenceTrigger(state.trigger)) {
+  if (!state.trigger.matches(MODEL_TRIGGER_SELECTOR)) {
     restoreModelTriggerLabel(state, true);
     state.trigger.removeAttribute(MODEL_TRIGGER_MARKER);
     state.trigger.removeAttribute(MODEL_TRIGGER_EXPANDED_MARKER);
@@ -362,21 +347,14 @@ function disposeModelTrigger(state) {
 
 function syncModelTriggers() {
   for (const [trigger, state] of modelTriggerStates) {
-    if (trigger.isConnected && isCodexIntelligenceTrigger(trigger)) continue;
+    if (trigger.isConnected && trigger.matches(MODEL_TRIGGER_SELECTOR)) continue;
 
     disposeModelTrigger(state);
     modelTriggerStates.delete(trigger);
   }
 
-  for (const trigger of document.querySelectorAll(
-    '[data-codex-intelligence-trigger="true"]',
-  )) {
-    if (
-      !isCodexIntelligenceTrigger(trigger) ||
-      modelTriggerStates.has(trigger)
-    ) {
-      continue;
-    }
+  for (const trigger of document.querySelectorAll(MODEL_TRIGGER_SELECTOR)) {
+    if (modelTriggerStates.has(trigger)) continue;
 
     const state = {
       trigger,
@@ -397,7 +375,7 @@ function syncModelTriggers() {
     state.observer = new MutationObserver(() => syncModelTriggerLabel(state));
     state.observer.observe(trigger, {
       attributes: true,
-      attributeFilter: ["aria-label"],
+      attributeFilter: ["data-model-selection-label"],
       characterData: true,
       childList: true,
       subtree: true,
@@ -407,22 +385,6 @@ function syncModelTriggers() {
     modelTriggerStates.set(trigger, state);
     syncModelTriggerLabel(state);
   }
-}
-
-function getMenuOwner(menu) {
-  const ownerId = menu.getAttribute("aria-labelledby");
-  const labelledOwner = ownerId ? document.getElementById(ownerId) : null;
-  if (labelledOwner?.matches("[data-codex-intelligence-trigger]")) {
-    return labelledOwner;
-  }
-
-  if (!menu.id) return null;
-
-  return (
-    [...document.querySelectorAll('[aria-controls]')].find(
-      (candidate) => candidate.getAttribute("aria-controls") === menu.id,
-    ) ?? null
-  );
 }
 
 function readModels(items) {
@@ -450,90 +412,26 @@ function readModels(items) {
     .filter(Boolean);
 }
 
-function getLegacyModelMenuDetails(menu) {
-  const ownerId = menu.getAttribute("aria-labelledby");
-  const submenuTrigger = ownerId ? document.getElementById(ownerId) : null;
-
-  if (!submenuTrigger?.matches('[role="menuitem"][aria-haspopup="menu"]')) {
-    return null;
-  }
-
-  const parentMenu = submenuTrigger.closest('[role="menu"]');
-  if (!parentMenu) return null;
-
-  // 设置菜单中只有第一个原生子菜单是模型列表；推理强度和速度
-  // 必须继续使用 Codex 原生的单层选项，不能进入前缀分类逻辑。
-  const settingsSubmenuTriggers = getDirectMenuItems(parentMenu).filter(
-    (item) => item.matches('[aria-haspopup="menu"]'),
-  );
-  if (settingsSubmenuTriggers[0] !== submenuTrigger) return null;
-
-  const parentOwnerId = parentMenu?.getAttribute("aria-labelledby");
-  const intelligenceTrigger = parentOwnerId
-    ? document.getElementById(parentOwnerId)
-    : null;
-
-  if (!isCodexIntelligenceTrigger(intelligenceTrigger)) return null;
-
-  const models = readModels(getDirectMenuItems(menu));
-  return models.length
-    ? { models, intelligenceTrigger, wrapper: models[0].item.parentElement }
-    : null;
-}
-
-function getModernModelList(picker) {
-  const advancedView = picker.lastElementChild ?? picker;
-
-  for (const container of [
-    advancedView,
-    ...advancedView.querySelectorAll("*"),
-  ]) {
-    const items = getDirectChildrenByRole(container, "menuitemradio");
-    if (items.length > 0) return { container, items };
-  }
-
-  return null;
-}
-
-function getModernModelMenuDetails(menu) {
-  const picker = [...menu.querySelectorAll("[data-model-picker-view]")].find(
-    (candidate) => candidate.closest('[role="menu"]') === menu,
-  );
+function getModelMenuDetails(menu) {
+  const picker = menu.querySelector('[data-model-picker-view="advanced"]');
   if (!picker) return null;
 
-  const intelligenceTrigger = getMenuOwner(menu);
-  if (!isCodexIntelligenceTrigger(intelligenceTrigger)) return null;
+  const trigger = document.getElementById(menu.getAttribute("aria-labelledby"));
+  if (!trigger?.matches(MODEL_TRIGGER_SELECTOR)) return null;
 
-  const modelList = getModernModelList(picker);
-  if (!modelList) return null;
-
-  // 新版高级视图可能在模型前放置 Default、Daybreak 等单选项，
-  // 它们都位于最后一个原生分隔线之前；分隔线之后才是模型集合。
-  const children = [...modelList.container.children];
-  const lastSeparatorIndex = children.reduce(
-    (lastIndex, child, index) =>
-      child.getAttribute("role") === "separator" ? index : lastIndex,
-    -1,
+  // 具体模型项带有原生提示浮层的 data-state，「默认」单选项没有。
+  const models = readModels(
+    [...picker.querySelectorAll('[role="menuitemradio"][data-state]')],
   );
-  const modelItems = modelList.items.filter(
-    (item) => children.indexOf(item) > lastSeparatorIndex,
-  );
-  const models = readModels(modelItems);
 
   return models.length
     ? {
         models,
-        intelligenceTrigger,
-        wrapper: modelList.container,
+        trigger,
+        wrapper: models[0].item.parentElement,
         viewElement: picker,
       }
     : null;
-}
-
-function getModelMenuDetails(menu) {
-  return (
-    getModernModelMenuDetails(menu) ?? getLegacyModelMenuDetails(menu)
-  );
 }
 
 function createChevron() {
@@ -751,7 +649,8 @@ function getKeyboardRows(state, eventTarget) {
 
   return [...container.children].filter(
     (row) =>
-      row.matches('[role="menuitem"]') && row.getClientRects().length > 0,
+      row.matches('[role="menuitem"], [role="menuitemradio"]') &&
+      row.getClientRects().length > 0,
   );
 }
 
@@ -764,7 +663,8 @@ function handleEnhancedMenuKeydown(state, event) {
     "[data-codex-tweaks-model-category]",
   );
   const isInSubmenu = state.submenu.contains(event.target);
-  if (!focusedCategory && !isInSubmenu) return;
+  const isInModelList = state.wrapper.contains(event.target);
+  if (!isInModelList && !isInSubmenu) return;
 
   if (
     state.activeGroupKey &&
@@ -912,9 +812,9 @@ function enhanceModelMenu(menu, details) {
 
   const state = {
     menu,
-    intelligenceTrigger: details.intelligenceTrigger,
+    trigger: details.trigger,
     wrapper,
-    viewElement: details.viewElement ?? null,
+    viewElement: details.viewElement,
     originalMenuInlineSize: menu.style.inlineSize,
     models: details.models,
     groups,
@@ -996,27 +896,17 @@ function scanForModelMenus() {
 
     const isStale =
       !state.wrapper.isConnected ||
-      !state.intelligenceTrigger.isConnected ||
-      /ChatGPT/i.test(
-        state.intelligenceTrigger.getAttribute("aria-label") ?? "",
-      ) ||
+      !state.trigger.isConnected ||
+      state.viewElement.getAttribute("data-model-picker-view") !== "advanced" ||
       state.models.some(
         (model) =>
           !model.anchor?.isConnected || !state.menu.contains(model.item),
       );
 
-    if (isStale) {
-      restoreModelMenu(state);
-      modelMenuStates.delete(menu);
-      continue;
-    }
+    if (!isStale) continue;
 
-    const leftAdvancedView =
-      state.viewElement &&
-      state.viewElement.getAttribute("data-model-picker-view") !== "advanced";
-    if (leftAdvancedView && state.activeGroupKey) {
-      hideModelSubmenu(state, { restoreFocus: false });
-    }
+    restoreModelMenu(state);
+    modelMenuStates.delete(menu);
   }
 
   for (const menu of document.querySelectorAll(

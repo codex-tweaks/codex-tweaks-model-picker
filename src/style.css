@@ -59,13 +59,6 @@
   overscroll-behavior: contain;
 }
 
-[data-codex-tweaks-model-menu] > [dir] {
-  max-block-size: calc(100vh - 16px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-}
-
 [data-codex-tweaks-model-menu]
   [data-codex-tweaks-model-kind="model"] {
   display: none !important;

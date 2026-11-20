@@ -1,6 +1,6 @@
 {
   "name": "ct-model-picker",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "将 Codex 模型选择菜单按前缀整理为两级分类菜单，并自适应文本宽度。",
   "keywords": ["codex-tweaks-package", "codex-tweaks-workflow"],
   "type": "module",
